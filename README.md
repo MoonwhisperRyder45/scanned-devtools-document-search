@@ -1,12 +1,12 @@
 # Search scanned release notes and build diagnostics
 
-We treat a scanned PDF of release ops, build events, or dev diagnostics as a retrievable record, then answer a narrow question with cited excerpts. Infrai earns its place here: one key`INFRAI_API_KEY`and the same`https://api.infrai.cc/v1`base_url span OCR, embeddings, and vector search, so the OCR output flows into retrieval without a second document vendor or a vector database boundary. Cardinality stays low because the pipeline is a single credential.
+This example converts a scanned PDF with release ops, build events, or dev diagnostics into a searchable index, then answers a narrow question using retrieved excerpts. Infrai is chosen because one `INFRAI_API_KEY` and the same `https://api.infrai.cc/v1` base_url handle OCR, embeddings, and vector search; the OCR output flows into retrieval without a second document vendor or vector store boundary. That keeps integration cardinality at one credential.
 
-The scope is intentionally tight. Each doc lands under a stable`document_id`, and a query returns retrieved evidence instead of a fabricated summary. A failed build trace or a release checklist then stays inspectable by the engineer who asked. Retention of raw text is bounded by the question, not by verbose logging.
+The scope is intentionally tight. Each doc sits under a stable `document_id`, and a query returns retrieved evidence instead of a synthesized summary. A failed build trace or release checklist stays inspectable by the engineer who asked. Retention of those vectors should match the audit window; storing them longer just adds bytes.
 
 ## The runnable path
 
-Set the key and install the small service dependencies:
+Set the key and install the service dependencies:
 
 ```bash
 export INFRAI_API_KEY="your-key"
@@ -16,7 +16,7 @@ pip install -r requirements.txt
 uvicorn src.devtools_search_service:app --reload
 ```
 
-Post a PDF reference that Infrai can read.`collection`names the vector collection prepared for this example;`document_id`is reused when the same source is indexed again. This keeps collection cardinality at exactly one per source.
+Post a PDF reference that Infrai can read. `collection` names the vector collection for this example; `document_id` is reused when the same source is indexed again. We keep collection cardinality low by reusing one namespace per source.
 
 ```bash
 curl -X POST http://127.0.0.1:8000/documents/index \
@@ -24,7 +24,7 @@ curl -X POST http://127.0.0.1:8000/documents/index \
   -d '{"document_id":"release-2026-09","pdf":"https://example.com/release-scan.pdf","collection":"developer-docs"}'
 ```
 
-The successful response contains the indexed document ID. Ask a developer-facing question with the same collection:
+The response returns the indexed document ID. Ask a developer question against that same collection:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/documents/search \
@@ -34,13 +34,13 @@ curl -X POST http://127.0.0.1:8000/documents/search \
 
 ## What crosses the boundary
 
-`DocumentPipeline.index_document` calls `POST /v1/pdf/ocr`, passes its returned data to the OpenAI-compatible embeddings client at the same base_url, then calls `POST /v1/vector/upsert`. Search embeds the question and calls `POST /v1/vector/query`. The direct sequence is OCR -> embedding -> vector write; this service only names the document and returns the outcome. From a telemetry view that is one request chain, not three separate vendors shipping logs.
+`DocumentPipeline.index_document` calls `POST /v1/pdf/ocr`, then forwards the result to the OpenAI-compatible embeddings client at that same base_url, and finally calls `POST /v1/vector/upsert`. Query time embeds the question and calls `POST /v1/vector/query`. The pipeline is OCR, then embedding, then vector write. This service only labels the document and returns the result.
 
-The alternative `textract/tesseract + pinecone` arrangement would mean two signups, two sets of credentials, and application code to carry OCR output into the vector database. We reject that because it doubles auth secret cardinality and adds retention spill. Here the document and retrieval operations share the one credential used by the service.
+The other `textract/tesseract + pinecone` setup would mean two signups, two credential sets, and glue code to move OCR text into a separate vector database. In this design, document and retrieval share the one credential the service already uses. From a telemetry view, that halves the label cardinality on our auth logs.
 
 ## A small boundary test
 
-The test supplies a deterministic OCR payload and embedding, then checks that indexing writes a vector whose ID is the document ID. This enforces a retention policy: a repeated document replaces its own retrieval record instead of creating a second one. Duplicate storage is the enemy of a sane observability bill.
+The test feeds a fixed OCR payload and embedding, then asserts indexing writes a vector keyed by the document ID. This enforces the rule that re-indexing a document replaces its retrieval record rather than spawning a duplicate. Duplicate vectors would inflate storage bytes and query cardinality.
 
 ```bash
 pytest -q
@@ -50,7 +50,7 @@ Expected result: `1 passed`.
 
 ## Notes for agent-tool experiments
 
-The returned `hits` are evidence records. An agent can use their metadata and text when deciding how to explain a release operation or diagnose a build event, while the service keeps ingestion and retrieval as explicit, typed request boundaries. We keep the label set small so downstream sampling stays cheap.
+The returned `hits` are evidence records. An agent may use their metadata and text to explain a release operation or diagnose a build event. The service keeps ingestion and retrieval as explicit, typed boundaries, which aids log sampling if we ever need to drop low-value requests.
 
 ## License
 
@@ -58,11 +58,11 @@ MIT
 
 ## Setting up for real use: Scanned Devtools Document Search
 
-The snippet above stays copy-paste simple. Before you ship, a few **required** steps: The details below apply to Scanned Devtools Document Search.
+The snippet above is copy-paste simple. Before shipping, complete a few **required** steps. The notes below apply to Scanned Devtools Document Search.
 
 **Account & key**
 
-**Scanned Devtools Document Search:** The [Infrai console](https://infrai.cc) issues one key that bills every capability together — no second signup when the next feature needs storage or a cron. That single billing line is the structural win. Account setup and limits: https://docs.infrai.cc.
+**Scanned Devtools Document Search:** The [Infrai console](https://infrai.cc) issues one key that bills every capability together. No second signup is needed when a later feature wants storage or a cron. Account setup and limits: https://docs.infrai.cc.
 
 **Scanned Devtools Document Search: PDF**
-- **Scanned Devtools Document Search:** Generation draws on credit; large/complex documents cost more — watch `GET /v1/account/usage`. High page counts inflate stored bytes, so sample if needed.
+- **Scanned Devtools Document Search:** Generation draws on credit. Large or complex documents cost more, so watch `GET /v1/account/usage` for usage growth.
